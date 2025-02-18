@@ -1,0 +1,342 @@
+יש לי אתר שבו יש 
+app.py:
+---
+import streamlit as st
+from streamlit_option_menu import option_menu
+from user_management import authenticate, check_admin
+from file_management import view_uploads, upload_file
+from pdf_processing import convert_pdf_to_png, convert_png_to_pdf, rotate_pdf, rearrange_pdf_ui  # עדכון כאן!
+
+# ייבוא של פונקציות מהקובץ pdf_processing.py
+from pdf_processing import (
+    convert_pdf_to_png_ui,
+    convert_png_to_pdf,
+    rotate_pdf,
+    rearrange_pdf_ui
+)
+
+
+# ייבוא של פונקציות מהקובץ file_management.py
+from file_management import (
+    upload_file,
+    delete_file,
+    list_files,
+    download_file
+)
+
+# ייבוא של פונקציות מהקובץ signature.py
+from signature import sign_file
+
+# ייבוא של פונקציות מהקובץ user_management.py
+from user_management import (
+    login,
+    logout,
+    is_admin,
+    add_user,
+    edit_user,
+    delete_user,
+    list_users
+)
+
+st.set_page_config(page_title="PDF Tool", page_icon="📄", layout="wide")
+
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+    st.session_state["is_admin"] = False
+
+if not st.session_state["logged_in"]:
+    st.title("🔑 התחברות למערכת")
+    email = st.text_input("אימייל")
+    password = st.text_input("סיסמה", type="password")
+    if st.button("🔓 התחבר"):
+        user = authenticate(email, password)
+        if user:
+            st.session_state["logged_in"] = True
+            st.session_state["is_admin"] = user[2]
+            st.experimental_rerun()
+        else:
+            st.error("⚠️ אימייל או סיסמה שגויים!")
+else:
+    with st.sidebar:
+        selected_option = option_menu(
+            "אפשרויות",
+            ["🏠 דף הבית", "📄 המרת PDF ל-PNG", "🖼️ המרת PNG ל-PDF", "🔄 סיבוב דפי PDF", "📑 סידור מחדש של דפי PDF", "📝 יישור טקסט", "📖 הדפסת חוברת"],
+            icons=["house", "file-pdf", "image", "arrow-repeat", "file-code", "file-text", "book"],
+            default_index=0,
+        )
+
+    if selected_option == "🏠 דף הבית":
+        st.title("📄 כלי PDF - דף הבית")
+    elif selected_option == "📄 המרת PDF ל-PNG":
+        convert_pdf_to_png()
+    elif selected_option == "🖼️ המרת PNG ל-PDF":
+        convert_png_to_pdf()
+    elif selected_option == "🔄 סיבוב דפי PDF":
+        rotate_pdf()
+    elif selected_option == "📑 סידור מחדש של דפי PDF":
+        rearrange_pdf_ui()  # עדכון כאן!
+    elif selected_option == "📝 יישור טקסט":
+        align_text()  # type: ignore
+    elif selected_option == "📖 הדפסת חוברת":
+        print_booklet()  # type: ignore
+
+---
+file_management.py:
+import os
+import sqlite3
+from datetime import datetime
+import streamlit as st
+
+def get_db_connection():
+    conn = sqlite3.connect("uploads.db")
+    conn.execute('''CREATE TABLE IF NOT EXISTS uploads (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    filename TEXT,
+                    upload_time TEXT
+                )''')
+    conn.commit()
+    return conn
+
+def upload_file():
+    uploaded_file = st.file_uploader("📂 העלה קובץ")
+    if uploaded_file:
+        filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{uploaded_file.name}"
+        with open(filename, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        
+        conn = get_db_connection()
+        conn.execute("INSERT INTO uploads (user_id, filename, upload_time) VALUES (?, ?, ?)",
+                     (st.session_state["user_id"], filename, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        conn.commit()
+        conn.close()
+        st.success("✅ הקובץ הועלה ונחתם בהצלחה!")
+
+def view_uploads():
+    st.title("🗂️ קבצים שהועלו")
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('''SELECT id, filename, upload_time FROM uploads''')
+    uploads = c.fetchall()
+    conn.close()
+
+    st.subheader("📁 רשימת קבצים שהועלו")
+    for upload in uploads:
+        st.write(f"🆔 {upload[0]} | 📄 {upload[1]} | ⏰ {upload[2]}")
+        if st.button("🗑️ מחיקה", key=f"delete_{upload[0]}"):
+            os.remove(upload[1])
+            conn = get_db_connection()
+            conn.execute("DELETE FROM uploads WHERE id=?", (upload[0],))
+            conn.commit()
+            conn.close()
+            st.success(f"✅ הקובץ {upload[1]} נמחק בהצלחה!")
+            st.experimental_rerun()
+
+
+---
+pdf_processing.py:
+import streamlit as st
+from PyPDF2 import PdfReader
+import pdf2image
+
+def convert_pdf_to_png(file):
+    """המרת PDF לתמונת PNG"""
+    images = pdf2image.convert_from_path(file)
+    for i, image in enumerate(images):
+        image.save(f'output_page_{i}.png', 'PNG')
+    st.success("המרת PDF ל-PNG הושלמה!")
+    for i in range(len(images)):
+        st.image(f'output_page_{i}.png')
+        with open(f'output_page_{i}.png', "rb") as img_file:
+            st.download_button(label="📥 הורד תמונה", data=img_file, file_name=f"output_page_{i}.png", mime="image/png")
+
+def convert_pdf_to_png_ui():
+    ""import streamlit as st
+from PyPDF2 import PdfReader, PdfWriter
+import pdf2image
+from PIL import Image
+
+# המרת PDF ל-PNG
+def convert_pdf_to_png(file):
+    images = pdf2image.convert_from_bytes(file.read())
+    for i, image in enumerate(images):
+        image.save(f'output_page_{i}.png', 'PNG')
+        st.image(f'output_page_{i}.png')
+        with open(f'output_page_{i}.png', "rb") as img_file:
+            st.download_button(label="📥 הורד תמונה", data=img_file, file_name=f"output_page_{i}.png", mime="image/png")
+
+def convert_pdf_to_png_ui():
+    st.title("📄 המרת PDF ל-PNG")
+    uploaded_file = st.file_uploader("בחר קובץ PDF", type="pdf")
+    if uploaded_file:
+        if st.button("📄 המר ל-PNG"):
+            convert_pdf_to_png(uploaded_file)
+
+# המרת PNG ל-PDF
+def convert_png_to_pdf(files):
+    images = [Image.open(file) for file in files]
+    pdf_path = "output.pdf"
+    images[0].save(pdf_path, save_all=True, append_images=images[1:], format="PDF")
+    with open(pdf_path, "rb") as pdf_file:
+        st.download_button(label="📥 הורד PDF", data=pdf_file, file_name="output.pdf", mime="application/pdf")
+
+def convert_png_to_pdf_ui():
+    st.title("🖼️ המרת PNG ל-PDF")
+    uploaded_files = st.file_uploader("בחר תמונות PNG", type="png", accept_multiple_files=True)
+    if uploaded_files:
+        if st.button("🖼️ המר ל-PDF"):
+            convert_png_to_pdf(uploaded_files)
+
+# סיבוב דפי PDF
+def rotate_pdf(file):
+    reader = PdfReader(file)
+    writer = PdfWriter()
+    for page in reader.pages:
+        page.rotate(90)
+        writer.add_page(page)
+    with open("rotated_pdf.pdf", "wb") as f:
+        writer.write(f)
+    with open("rotated_pdf.pdf", "rb") as pdf_file:
+        st.download_button(label="📥 הורד PDF", data=pdf_file, file_name="rotated_pdf.pdf", mime="application/pdf")
+
+def rotate_pdf_ui():
+    st.title("🔄 סיבוב דפי PDF")
+    uploaded_file = st.file_uploader("בחר קובץ PDF", type="pdf")
+    if uploaded_file:
+        if st.button("🔄 סובב ב-90 מעלות"):
+            rotate_pdf(uploaded_file)
+
+# סידור מחדש של דפי PDF
+def rearrange_pdf(file):
+    reader = PdfReader(file)
+    writer = PdfWriter()
+    pages = reader.pages[::-1]
+    for page in pages:
+        writer.add_page(page)
+    with open("rearranged_pdf.pdf", "wb") as f:
+        writer.write(f)
+    with open("rearranged_pdf.pdf", "rb") as pdf_file:
+        st.download_button(label="📥 הורד PDF", data=pdf_file, file_name="rearranged_pdf.pdf", mime="application/pdf")
+
+def rearrange_pdf_ui():
+    st.title("📑 סידור מחדש של דפי PDF")
+    uploaded_file = st.file_uploader("בחר קובץ PDF", type="pdf")
+    if uploaded_file:
+        if st.button("📑 סידור מחדש"):
+            rearrange_pdf(uploaded_file)
+"ממשק משתמש להמרת PDF ל-PNG"""
+    st.title("📄 המרת PDF ל-PNG")
+    uploaded_file = st.file_uploader("בחר קובץ PDF", type="pdf")
+    if uploaded_file:
+        if st.button("📄 המר ל-PNG"):
+            convert_pdf_to_png(uploaded_file)
+
+
+---
+pdf_processing.test.py:
+import pytest
+from pdf_processing import convert_pdf_to_png, convert_png_to_pdf, rotate_pdf, rearrange_pdf
+
+def test_convert_pdf_to_png():
+    assert convert_pdf_to_png("test.pdf") is None
+
+def test_convert_png_to_pdf():
+    assert convert_png_to_pdf(["test1.png", "test2.png"]) is None
+
+def test_rotate_pdf():
+    assert rotate_pdf("test.pdf") is None
+
+def test_rearrange_pdf():
+    assert rearrange_pdf("test.pdf") is None
+
+---
+signature.py:
+from PyPDF2 import PdfReader, PdfWriter
+from datetime import datetime
+
+def sign_pdf(file):
+    """חתימה על קובץ PDF"""
+    reader = PdfReader(file)
+    writer = PdfWriter()
+    
+    # הוספת תאריך ושעה לחתימה
+    signature_text = f"נחתם בתאריך: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    # מניחים שהתמונה תיווסף כאן, למשל כחתימה גרפית
+    st.text(signature_text)
+    
+    for page in reader.pages:
+        writer.add_page(page)
+
+    with open("signed_pdf.pdf", "wb") as f:
+        writer.write(f)
+
+    st.success("הקובץ נחתם בהצלחה!")
+
+---
+user_management.py:
+import sqlite3
+import streamlit as st
+
+def get_db_connection():
+    conn = sqlite3.connect("users.db")
+    conn.execute('''CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL UNIQUE,
+                    password TEXT NOT NULL,
+                    is_admin BOOLEAN NOT NULL DEFAULT 0
+                )''')
+    conn.commit()
+    return conn
+
+def authenticate(email, password):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT id, email, is_admin FROM users WHERE email=? AND password=?", (email, password))
+    user = c.fetchone()
+    conn.close()
+    return user
+
+def check_admin():
+    return st.session_state.get("is_admin", False)
+
+def manage_users():
+    if not check_admin():
+        st.error("⛔ אין לך הרשאות מנהל!")
+        return
+
+    st.title("🛠 ניהול משתמשים")
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT id, email, is_admin FROM users")
+    users = c.fetchall()
+
+    st.subheader("📋 רשימת משתמשים")
+    for user in users:
+        st.write(f"🆔 {user[0]} | ✉️ {user[1]} | 🔑 {'מנהל' if user[2] else 'משתמש רגיל'}")
+
+    st.subheader("➕ הוספת משתמש חדש")
+    new_email = st.text_input("אימייל חדש")
+    new_password = st.text_input("סיסמה חדשה", type="password")
+    new_is_admin = st.checkbox("האם מנהל?")
+    if st.button("💾 שמירת משתמש חדש"):
+        try:
+            c.execute("INSERT INTO users (email, password, is_admin) VALUES (?, ?, ?)",
+                      (new_email, new_password, new_is_admin))
+            conn.commit()
+            st.success("✅ משתמש נוסף בהצלחה!")
+            st.experimental_rerun()
+        except sqlite3.IntegrityError:
+            st.error("⚠️ אימייל זה כבר קיים במערכת.")
+    conn.close()
+
+---
+requirements.txt:
+streamlit
+streamlit-option-menu
+PyPDF2
+pdf2image
+Pillow
+pytest
+
+
